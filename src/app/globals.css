@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f3f6fb;
+  --surface: #ffffff;
+  --surface-soft: #eef3fb;
+  --surface-pop: #e6f1ff;
+  --text: #0f1824;
+  --text-muted: #607086;
+  --line: rgba(17, 19, 22, 0.08);
+  --accent: #0c8fff;
+  --accent-soft: #63c4ff;
+  --sun: #ffc977;
+  --mint: #3ed9af;
+  --safe-bottom: env(safe-area-inset-bottom);
+}
+
+.dark {
+  --bg: #0a0c0f;
+  --surface: #10161e;
+  --surface-soft: #162130;
+  --surface-pop: #14263d;
+  --text: #f5f7fa;
+  --text-muted: #a5b4c8;
+  --line: rgba(255, 255, 255, 0.09);
+  --accent: #6caeff;
+  --accent-soft: #7ee3ff;
+  --sun: #ffd38a;
+  --mint: #4be6bb;
+}
+
+* {
+  border-color: var(--line);
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 34%),
+    radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--sun) 14%, transparent), transparent 28%),
+    radial-gradient(circle at 48% 100%, color-mix(in srgb, var(--mint) 9%, transparent), transparent 36%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--font-jakarta), "Avenir Next", "Segoe UI", sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.glass {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.scroll-clean {
+  scrollbar-width: thin;
+}
+
+.gradient-card {
+  background:
+    linear-gradient(140deg, #4f9eff 0%, #74d8ff 47%, #7ce6c8 100%);
+}
