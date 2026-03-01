@@ -17,14 +17,22 @@ import {
   JournalAttachment,
   JournalEntry,
   JournalFolder,
+  LinkPreview,
   NavSection,
   VoiceMemo,
 } from "@/lib/types";
+
+type DraftLinkAttachment = {
+  id: string;
+  url: string;
+  preview?: LinkPreview;
+};
 
 type ComposerState = {
   title: string;
   content: string;
   files: File[];
+  links: DraftLinkAttachment[];
   voiceMemos: VoiceMemo[];
 };
 
@@ -36,6 +44,7 @@ const emptyComposer: ComposerState = {
   title: "",
   content: "",
   files: [],
+  links: [],
   voiceMemos: [],
 };
 
@@ -48,6 +57,7 @@ export default function Page() {
   const [composer, setComposer] = useState<ComposerState>(emptyComposer);
   const [error, setError] = useState<string>("");
   const [isRecording, setIsRecording] = useState(false);
+  const [isExtractingLinks, setIsExtractingLinks] = useState(false);
   const [isSavingEntry, setIsSavingEntry] = useState(false);
   const [theme, setThemeState] = useState<"light" | "dark">("light");
   const [timelineDetail, setTimelineDetail] = useState<TimelineEntry | null>(null);
@@ -123,7 +133,13 @@ export default function Page() {
 
     const title = composer.title.trim();
     const content = composer.content.trim();
-    if (!title && !content && composer.files.length === 0 && composer.voiceMemos.length === 0) {
+    if (
+      !title &&
+      !content &&
+      composer.files.length === 0 &&
+      composer.links.length === 0 &&
+      composer.voiceMemos.length === 0
+    ) {
       setError("Add at least text, a file, or a voice memo.");
       return;
     }
@@ -132,7 +148,7 @@ export default function Page() {
     setIsSavingEntry(true);
 
     try {
-      const attachments: JournalAttachment[] = await Promise.all(
+      const fileAttachments: JournalAttachment[] = await Promise.all(
         composer.files.map(async (file) => ({
           id: uid(),
           name: file.name,
@@ -143,12 +159,23 @@ export default function Page() {
         })),
       );
 
+      const linkAttachments: JournalAttachment[] = composer.links.map((link) => ({
+        id: link.id,
+        name: link.preview?.title || hostLabel(link.url),
+        mimeType: "text/uri-list",
+        size: link.url.length,
+        dataUrl: link.url,
+        kind: "link",
+        url: link.url,
+        preview: link.preview,
+      }));
+
       const entry: JournalEntry = {
         id: uid(),
         title: title || "Untitled",
         content,
         createdAt: new Date().toISOString(),
-        attachments,
+        attachments: [...linkAttachments, ...fileAttachments],
         voiceMemos: composer.voiceMemos,
       };
 
@@ -235,10 +262,52 @@ export default function Page() {
     setJournalsScreen("compose");
   }
 
-  function appendSelectedFiles(fileList: FileList | null) {
-    const nextFiles = Array.from(fileList ?? []);
-    if (nextFiles.length === 0) return;
-    setComposer((current) => ({ ...current, files: [...current.files, ...nextFiles] }));
+  async function appendSelectedFilesWithSource(fileList: FileList | null, source: "files" | "camera") {
+    const selectedFiles = Array.from(fileList ?? []);
+    if (selectedFiles.length === 0) return;
+
+    if (source === "files") {
+      setComposer((current) => ({ ...current, files: [...current.files, ...selectedFiles] }));
+      return;
+    }
+
+    setIsExtractingLinks(true);
+    setError("");
+
+    try {
+      const regularFiles: File[] = [];
+      const extractedLinks: DraftLinkAttachment[] = [];
+
+      for (const file of selectedFiles) {
+        const detectedUrl = await detectUrlFromImage(file);
+        if (!detectedUrl) {
+          regularFiles.push(file);
+          continue;
+        }
+
+        const preview = await fetchLinkPreview(detectedUrl);
+        extractedLinks.push({
+          id: uid(),
+          url: detectedUrl,
+          preview,
+        });
+      }
+
+      setComposer((current) => {
+        const existing = new Set(current.links.map((link) => link.url));
+        const dedupedLinks = extractedLinks.filter((link) => !existing.has(link.url));
+        return {
+          ...current,
+          files: [...current.files, ...regularFiles],
+          links: [...current.links, ...dedupedLinks],
+        };
+      });
+    } catch {
+      setError("Could not scan this image for links. Photo saved as a normal attachment.");
+      setComposer((current) => ({ ...current, files: [...current.files, ...selectedFiles] }));
+    } finally {
+      setIsExtractingLinks(false);
+    }
   }
 
   function toggleThemeEnabled(enabled: boolean) {
@@ -461,7 +530,7 @@ export default function Page() {
                   accept="image/*"
                   capture="environment"
                   onChange={(event) => {
-                    appendSelectedFiles(event.target.files);
+                    appendSelectedFilesWithSource(event.target.files, "camera");
                     event.currentTarget.value = "";
                   }}
                 />
@@ -472,14 +541,22 @@ export default function Page() {
                   type="file"
                   multiple
                   onChange={(event) => {
-                    appendSelectedFiles(event.target.files);
+                    appendSelectedFilesWithSource(event.target.files, "files");
                     event.currentTarget.value = "";
                   }}
                 />
               </div>
 
-              {(composer.files.length > 0 || composer.voiceMemos.length > 0) && (
+              {isExtractingLinks && (
+                <p className="mt-3 text-sm text-[var(--text-muted)]">Scanning captured image for links...</p>
+              )}
+
+              {(composer.files.length > 0 || composer.links.length > 0 || composer.voiceMemos.length > 0) && (
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {composer.links.map((link) => (
+                    <LinkPreviewCard key={link.id} url={link.url} preview={link.preview} />
+                  ))}
+
                   {composer.files.map((file, index) => (
                     <div key={`${file.name}-${index}`} className="rounded-2xl border bg-[var(--surface)] p-3 text-sm">
                       <p className="truncate font-medium">{file.name}</p>
@@ -538,7 +615,9 @@ export default function Page() {
                   </span>
                 </div>
                 <p className="mt-3 line-clamp-2 text-sm text-[var(--text-muted)]">{summary(entry.content)}</p>
-                <p className="mt-3 text-xs text-[var(--text-muted)]">{entry.attachments.length} files | {entry.voiceMemos.length} memos</p>
+                <p className="mt-3 text-xs text-[var(--text-muted)]">
+                  {entry.attachments.length} attachments | {entry.voiceMemos.length} memos
+                </p>
               </button>
             ))}
 
@@ -695,7 +774,13 @@ function EntryDetails({ entry }: { entry: JournalEntry }) {
       {entry.attachments.length > 0 && (
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           {entry.attachments.map((file) =>
-            file.kind === "image" ? (
+            file.kind === "link" ? (
+              <LinkPreviewCard
+                key={file.id}
+                url={file.url || file.dataUrl}
+                preview={file.preview}
+              />
+            ) : file.kind === "image" ? (
               <a
                 key={file.id}
                 className="block overflow-hidden rounded-2xl border"
@@ -740,6 +825,140 @@ function EntryDetails({ entry }: { entry: JournalEntry }) {
       )}
     </article>
   );
+}
+
+type BarcodeResult = {
+  rawValue?: string;
+};
+
+type BarcodeDetectorLike = {
+  detect: (source: ImageBitmap) => Promise<BarcodeResult[]>;
+};
+
+function LinkPreviewCard({ url, preview }: { url: string; preview?: LinkPreview }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+      className="block rounded-2xl border bg-[var(--surface)] p-3 text-sm transition hover:border-[var(--accent-soft)]"
+    >
+      {preview?.image && (
+        <div className="mb-2 overflow-hidden rounded-xl border">
+          <Image src={preview.image} alt={preview.title || "Link preview"} width={640} height={320} className="h-28 w-full object-cover" />
+        </div>
+      )}
+      <p className="truncate font-medium">{preview?.title || hostLabel(url)}</p>
+      {preview?.description && <p className="mt-1 line-clamp-2 text-[var(--text-muted)]">{preview.description}</p>}
+      <p className="mt-2 truncate text-xs text-[var(--accent)]">{url}</p>
+    </a>
+  );
+}
+
+function hostLabel(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "Web link";
+  }
+}
+
+function normalizeDetectedUrl(value: string) {
+  const raw = value.trim();
+  if (!raw) return null;
+
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (!["http:", "https:"].includes(parsed.protocol)) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function getBarcodeDetector(): BarcodeDetectorLike | null {
+  if (typeof window === "undefined") return null;
+
+  const detectorCtor = (
+    window as Window & {
+      BarcodeDetector?: new (options?: { formats?: string[] }) => BarcodeDetectorLike;
+    }
+  ).BarcodeDetector;
+
+  if (!detectorCtor) return null;
+
+  try {
+    return new detectorCtor({
+      formats: ["qr_code", "data_matrix", "aztec", "code_128", "code_39", "code_93", "ean_13", "ean_8", "upc_a"],
+    });
+  } catch {
+    try {
+      return new detectorCtor();
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function detectUrlFromImage(file: File): Promise<string | null> {
+  if (!file.type.startsWith("image/")) return null;
+  const detector = getBarcodeDetector();
+  if (!detector) return null;
+
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createImageBitmap(file);
+    const results = await detector.detect(bitmap);
+    for (const result of results) {
+      const url = normalizeDetectedUrl(result.rawValue || "");
+      if (url) return url;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    bitmap?.close();
+  }
+}
+
+async function fetchLinkPreview(url: string): Promise<LinkPreview | undefined> {
+  const timeout = 7000;
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(`https://api.microlink.io/?url=${encodeURIComponent(url)}`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) return undefined;
+
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== "object") return undefined;
+
+    const data = (payload as { data?: Record<string, unknown> }).data;
+    if (!data) return undefined;
+
+    const title = typeof data.title === "string" ? data.title : undefined;
+    const description = typeof data.description === "string" ? data.description : undefined;
+    const image = (() => {
+      const rawImage = data.image;
+      if (typeof rawImage === "string") return rawImage;
+      if (rawImage && typeof rawImage === "object") {
+        const maybeUrl = (rawImage as { url?: unknown }).url;
+        if (typeof maybeUrl === "string") return maybeUrl;
+      }
+      return undefined;
+    })();
+    const siteName = typeof data.publisher === "string" ? data.publisher : undefined;
+
+    if (!title && !description && !image && !siteName) return undefined;
+    return { title, description, image, siteName };
+  } catch {
+    return undefined;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function summary(content: string) {

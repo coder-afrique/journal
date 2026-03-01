@@ -1,12 +1,21 @@
 export type NavSection = "journals" | "timeline" | "settings";
 
+export type LinkPreview = {
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+};
+
 export type JournalAttachment = {
   id: string;
   name: string;
   mimeType: string;
   size: number;
   dataUrl: string;
-  kind: "image" | "file";
+  kind: "image" | "file" | "link";
+  url?: string;
+  preview?: LinkPreview;
 };
 
 export type VoiceMemo = {
